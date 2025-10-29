@@ -22,7 +22,7 @@ def _load_env() -> None:
 _load_env()
 
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # Inline fallback for development per user's request
 JWT_SECRET = os.getenv("JWT_SECRET") or "your_jwt_secret"

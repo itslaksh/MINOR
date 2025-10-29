@@ -35,6 +35,7 @@ app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(chats_router, prefix="/chats", tags=["chats"])
 from .routes.admin import router as admin_router
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
+app.include_router(voice_router,prefix="/voice",tags=['voice'])
 
 
 @app.get("/health")
