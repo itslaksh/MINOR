@@ -2,6 +2,7 @@ import os
 import re
 from typing import List, Tuple, Optional
 
+from bson import ObjectId
 from sentence_transformers import SentenceTransformer, util
 from google import genai
 from google.genai import types
@@ -213,16 +214,30 @@ async def _vector_search(query: str, top_k: int = 3) -> List[Tuple[str, float]]:
     return results
 
 
-async def run_gemini_generation(user_query: str, context: str) -> str:
-    """Generate response using Gemini API with proper prompting."""
+async def run_gemini_generation(user_query: str, context: str, conversation_history: List[Tuple[str, str]] = None) -> str:
+    """Generate response using Gemini API with proper prompting and conversation history."""
     global _gemini_client
     
     if _gemini_client is None:
         return ""
     
+    if conversation_history is None:
+        conversation_history = []
+    
     try:
-        # Create a comprehensive prompt for the DoJ chatbot
-        prompt = f"""You are an official Department of Justice (India) chatbot assistant. Your role is to help Indian citizens with legal queries, court procedures, and government services.
+        # Build conversation history for multi-turn chat
+        contents = []
+        
+        # Add system context
+        if context:
+            context_section = f"""Context from Knowledge Base:
+{context}
+
+Important: If the user is asking about "process", "procedure", "how to file", "guide me", or similar procedural questions, provide detailed step-by-step instructions from the context. Don't give generic responses - give specific, actionable steps they can follow."""
+        else:
+            context_section = """Note: You have access to the conversation history below. Please use that context to answer the user's question accurately."""
+        
+        system_context = f"""You are an official Department of Justice (India) chatbot assistant. Your role is to help Indian citizens with legal queries, court procedures, and government services.
 
 Based on the provided context, answer the user's question in a helpful, accurate, and citizen-friendly manner. Follow these guidelines:
 
@@ -236,17 +251,32 @@ Based on the provided context, answer the user's question in a helpful, accurate
 8. Include required documents, fees, and timelines when mentioned in context
 9. If user is asking follow-up questions about legal processes, assume they want detailed procedural guidance
 
-Context from Knowledge Base:
-{context}
+{context_section}"""
 
-User Question: {user_query}
-
-Important: If the user is asking about "process", "procedure", "how to file", "guide me", or similar procedural questions, provide detailed step-by-step instructions from the context. Don't give generic responses - give specific, actionable steps they can follow."""
+        # If no history, add system context with first user query
+        if not conversation_history:
+            contents.append({
+                "role": "user",
+                "parts": [{"text": f"{system_context}\n\nUser Question: {user_query}"}]
+            })
+        else:
+            # Add conversation history (alternating user and model messages)
+            for role, text in conversation_history:
+                contents.append({
+                    "role": role,
+                    "parts": [{"text": text}]
+                })
+            
+            # For multi-turn conversations, add current query with context
+            contents.append({
+                "role": "user",
+                "parts": [{"text": f"{system_context}\n\nUser Question: {user_query}"}]
+            })
 
         # Generate response with thinking disabled for faster response
         response = _gemini_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),  # Disable thinking for speed
                 temperature=0.7,
@@ -287,24 +317,55 @@ def _get_fallback_response(user_query: str) -> str:
             "Please ask me about any legal or government service you need help with.")
 
 
-async def generate_bot_response(user_query: str, db) -> str:
+async def generate_bot_response(user_query: str, db, chat_id: str = None) -> str:
     """Generate bot response with confidence threshold and out-of-scope detection."""
     
-    # Step 1: Check if query is legal-related
-    if not _is_legal_query(user_query):
+    # Step 1: Fetch conversation history if chat_id is provided (do this first!)
+    conversation_history: List[Tuple[str, str]] = []
+    has_history = False
+    if chat_id:
+        try:
+            messages = []
+            async for doc in db.messages.find({"chatId": ObjectId(chat_id)}).sort("timestamp", 1):
+                # Convert sender to role format expected by Gemini
+                role = "user" if doc.get("sender") == "user" else "model"
+                messages.append((role, doc.get("text", "")))
+            
+            # Remove the last message (the current user message we just inserted)
+            if messages:
+                messages = messages[:-1]
+            
+            # Only use the last 10 messages to avoid exceeding token limits
+            conversation_history = messages[-10:] if len(messages) > 10 else messages
+            has_history = len(conversation_history) > 0
+        except Exception as e:
+            print(f"Error fetching conversation history: {e}")
+    
+    # Step 2: Check if query is legal-related (skip if we have conversation history)
+    if not has_history and not _is_legal_query(user_query):
         return _get_fallback_response(user_query)
     
-    # Step 2: Vector search in knowledge_base.txt
+    # Step 3: Vector search in knowledge_base.txt
     matches = await _vector_search(user_query, top_k=5)
     if not matches:
+        # If we have conversation history, still try to use Gemini with context
+        if has_history and _gemini_client is not None:
+            gemini_response = await run_gemini_generation(user_query, "", conversation_history)
+            if gemini_response and len(gemini_response.split()) >= 5:
+                return gemini_response
         return _get_fallback_response(user_query)
 
-    # Step 3: Check confidence threshold on the best match
+    # Step 4: Check confidence threshold on the best match
     best_score = matches[0][1]
     if best_score < MIN_CONFIDENCE_THRESHOLD:
+        # If we have conversation history, still try to use Gemini with context
+        if has_history and _gemini_client is not None:
+            gemini_response = await run_gemini_generation(user_query, "", conversation_history)
+            if gemini_response and len(gemini_response.split()) >= 5:
+                return gemini_response
         return _get_fallback_response(user_query)
 
-    # Step 4: Filter and rank chunks
+    # Step 5: Filter and rank chunks
     filtered: List[Tuple[str, float, str]] = []
     for chunk, score in matches:
         cleaned = _clean_chunk_text(chunk)
@@ -344,9 +405,14 @@ async def generate_bot_response(user_query: str, db) -> str:
     ranked.sort(key=lambda x: x[3], reverse=True)
 
     if not ranked or ranked[0][3] < MIN_COMPOSITE_THRESHOLD:
+        # If we have conversation history, still try to use Gemini with context
+        if has_history and _gemini_client is not None:
+            gemini_response = await run_gemini_generation(user_query, "", conversation_history)
+            if gemini_response and len(gemini_response.split()) >= 5:
+                return gemini_response
         return _get_fallback_response(user_query)
 
-    # Step 5: Try Gemini generation with the best context(s)
+    # Step 6: Try Gemini generation with the best context(s) and conversation history
     if ranked:
         # Use top 2 chunks for better context
         top_contexts = [chunk[2] for chunk in ranked[:2]]
@@ -354,7 +420,7 @@ async def generate_bot_response(user_query: str, db) -> str:
         
         # Try Gemini API first
         if _gemini_client is not None:
-            gemini_response = await run_gemini_generation(user_query, combined_context)
+            gemini_response = await run_gemini_generation(user_query, combined_context, conversation_history)
             if gemini_response and len(gemini_response.split()) >= 5:
                 return gemini_response
 
@@ -371,7 +437,7 @@ async def generate_bot_response(user_query: str, db) -> str:
                 if len(result) > 20:  # Ensure it's substantial
                     return result[:800]
 
-    # Step 6: Fallback to DB-stored FAQs (legacy support)
+    # Step 7: Fallback to DB-stored FAQs (legacy support)
     try:
         fetched: List[Tuple[str, str]] = []
         async for doc in db.faqs.find({}):

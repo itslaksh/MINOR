@@ -74,7 +74,7 @@ async def send_message(chat_id: str, payload: MessageCreate, user_id: str = Depe
 	res = await db.messages.insert_one(user_msg)
 	user_msg["_id"] = res.inserted_id
 
-	bot_text = await generate_bot_response(payload.text, db)
+	bot_text = await generate_bot_response(payload.text, db, chat_id)
 	bot_msg = {
 		"chatId": ObjectId(chat_id),
 		"sender": "bot",

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChat, getMessages, listChats, sendMessage } from '../lib/api'
 import { useAuth } from '../auth/AuthContext'
 import { setAuthToken } from '../lib/api'
+import MessageBubble from '../components/MessageBubble'
 
 interface ChatItem { id: string; createdAt: string }
 interface MessageItem { id: string; sender: 'user' | 'bot'; text: string; timestamp: string }
@@ -150,13 +151,7 @@ export default function ChatPage() {
                   </div>
                   <div className="mt-2 space-y-3">
                     {g.items.map((m, idx) => (
-                      <div key={m.id} className={`flex gap-2 ${m.sender === 'user' ? 'flex-row-reverse' : ''} animate-fadeIn`}>
-                        <Avatar sender={m.sender} />
-                        <div className={`max-w-[80%] px-4 py-2 rounded-2xl shadow-sm border ${m.sender === 'user' ? 'bg-black text-white dark:bg-white dark:text-black border-black/10 dark:border-white/10' : 'bg-white/70 dark:bg-neutral-900/50 backdrop-blur border-neutral-200 dark:border-neutral-800'}`}>
-                          <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
-                          <span className="block mt-1 text-[10px] opacity-60">{new Date(m.timestamp).toLocaleTimeString()}</span>
-                        </div>
-                      </div>
+                      <MessageBubble key={m.id} sender={m.sender} text={m.text} timestamp={m.timestamp} />
                     ))}
                   </div>
                 </div>
