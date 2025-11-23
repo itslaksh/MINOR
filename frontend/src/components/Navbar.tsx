@@ -2,6 +2,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useTheme } from '../theme/ThemeContext'
 import { useAuth } from '../auth/AuthContext'
 import { useEffect, useRef, useState } from 'react'
+import logoImg from '../assets/logo-img.png'
 
 export default function Navbar() {
   const { theme, toggle } = useTheme()
@@ -22,8 +23,9 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-40 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:supports-[backdrop-filter]:bg-neutral-950/40 border-b border-neutral-200/70 dark:border-neutral-800/70">
       <div className="container flex h-14 items-center justify-between">
-        <Link to="/" className="font-semibold tracking-tight hover:opacity-80 transition-opacity">
-          DoJ Chatbot
+        <Link to="/" className="font-semibold tracking-tight hover:opacity-80 transition-opacity flex items-center gap-2">
+          <img src={logoImg} alt="JusticeLink Logo" className="h-8 w-8" />
+          JusticeLink
         </Link>
         <div className="flex items-center gap-2" ref={menuRef}>
           {token && (
